@@ -26,7 +26,9 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_lt_rokas_wirelessmic_MainActivity_stopAudio(JNIEnv *env, jobject thiz) {
     recorder.stopRecording();
-    server->stop();
-    delete server;
-    server = NULL;
+    if (server != NULL) {
+        server->stop();
+        delete server;
+        server = NULL;
+    }
 }

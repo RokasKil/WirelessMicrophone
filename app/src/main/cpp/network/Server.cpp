@@ -6,7 +6,7 @@
 
 #include <memory>
 
-Server::Server(const char* address, unsigned short port, atomic_queue::AtomicQueue<int32_t, 1024*1024, 256*256*100> *queue) {
+Server::Server(const char* address, unsigned short port, AudioQueue *queue) {
     this->port = port;
     this->queue = queue;
     // Creating socket file descriptor
@@ -63,6 +63,18 @@ void Server::acceptLoop() {
     while(running && (clientSocket = ::accept(serverSocket, (struct sockaddr *) &clientAddress, &clientAddressLength)) >= 0) {
         connectionsMutex.lock();
         if (running) {
+            int flag = 1;
+            int result = setsockopt(clientSocket,            /* socket affected */
+                                    IPPROTO_TCP,     /* set option at TCP level */
+                                    TCP_NODELAY,     /* name of option */
+                                    (char *) &flag,  /* the cast is historical cruft */
+                                    sizeof(int));    /* length of option value */
+
+            if (result == -1) {
+                LOGE("client SETOPT FAILED");
+                close(clientSocket);
+                continue;
+            }
             shared_ptr<Connection> con = make_shared<Connection>(clientSocket, clientAddress);
             con->thread = make_unique<thread>(&Server::recvLoop, this, con);
             connections.push_back(con);
@@ -77,7 +89,7 @@ void Server::acceptLoop() {
 }
 
 void Server::sendLoop() {
-    char* buffer = new char[1 + 2 + 65564];
+    char* buffer = new char[1 + 1 + 510];
     int used = 0;
     //LOGI("Send LOOP");
     while (running) {
@@ -86,16 +98,16 @@ void Server::sendLoop() {
 
         //LOGI("BUILDING BUFFER");
         buffer[0] = 'a';
-        used = 3;
+        used = 2;
         unsigned int currentSize = queue->was_size();
         //LOGI("size %d", currentSize);
-        for(unsigned int i = 0; i < currentSize && used + 2 <= 1 + 2 + 65564; i++) {
+        for(unsigned int i = 0; i < currentSize && used + 2 <= 1 + 1 + 510; i++) {
             *((int16_t*)(buffer + used)) = (int16_t)queue->pop();
             used += 2;
         }
         //LOGI("used %d", used);
-        *((u_int16_t*)(buffer + 1)) = used - 3;
-        if (used == 3) {
+        ((unsigned char*) buffer)[1] = (unsigned char)((used - 2)/2);
+        if (used == 2) {
             continue;
         }
         //LOGI("Sending");
@@ -105,6 +117,7 @@ void Server::sendLoop() {
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         //LOGI("Send took %lld us for %d", elapsed.count(), used);
         //LOGI("Sleeping");
+        //LOGI("Queue size %d", queue->was_size());
         std::this_thread::sleep_for(1ms);
         //LOGI("Slept");
     }

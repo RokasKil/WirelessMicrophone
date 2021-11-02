@@ -13,7 +13,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include "../log/Log.h"
-#include <atomic_queue/atomic_queue.h>
+#include "../queue/Queue.h"
 #include <unistd.h>
 #include <netinet/tcp.h>
 
@@ -21,7 +21,7 @@ using namespace std;
 
 class Server {
 public:
-    Server(const char* address, unsigned short port, atomic_queue::AtomicQueue<int32_t, 1024*1024, 256*256*100> *queue);
+    Server(const char* address, unsigned short port, AudioQueue *queue);
     bool start();
     bool stop();
     bool isValid();
@@ -54,7 +54,7 @@ private:
     unique_ptr<thread> sendThread = NULL;
 
     std::mutex connectionsMutex;
-    atomic_queue::AtomicQueue<int32_t, 1024*1024, 256*256*100> *queue;
+    AudioQueue *queue;
 };
 
 

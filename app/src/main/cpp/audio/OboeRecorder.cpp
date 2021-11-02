@@ -21,16 +21,16 @@ int32_t OboeRecorder::startRecording() {
         ->setSampleRate(sampleRate)
         ->setCallback(this)
         ->setFormat(AudioFormat::I16) //Signed 16bit integers
-        ->setFramesPerCallback(120)
-        ->setFramesPerDataCallback(120)
-        ->setBufferCapacityInFrames(240)
+        //->setFramesPerCallback(120)
+        //->setFramesPerDataCallback(120)
+        //->setBufferCapacityInFrames(240)
         ->openStream(mStream);
 
     if (result != Result::OK) {
         LOGE("Error opening stream %s", convertToText(result));
         return (int32_t) result;
     }
-    auto setBufferSizeResult = mStream->setBufferSizeInFrames(100);//mStream->getFramesPerBurst()); // * 2);
+    auto setBufferSizeResult = mStream->setBufferSizeInFrames(mStream->getFramesPerBurst() * 2);
     if (setBufferSizeResult) {
         LOGD("New buffer size is %d frames", setBufferSizeResult.value());
     }
@@ -72,9 +72,11 @@ DataCallbackResult OboeRecorder::onAudioReady(oboe::AudioStream *oboeStream, voi
     //by default we have 2 channels running on I16 format that means
     // one frame is 2 * 2 = 4 bytes
     //queue.
-    auto* audioDataCasted = (int16_t*) audioData;
-    for (int i = 0; i < numFrames * channelCount; i++) {
-        queue.push(audioDataCasted[i]);
+    if (!queue.was_full()) {
+        auto *audioDataCasted = (int16_t *) audioData;
+        for (int i = 0; i < numFrames * channelCount; i++) {
+            queue.push(audioDataCasted[i]);
+        }
     }
     return DataCallbackResult::Continue;
 }

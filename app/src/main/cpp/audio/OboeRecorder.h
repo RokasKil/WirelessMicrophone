@@ -8,7 +8,7 @@
 #include <oboe/Oboe.h>
 #include <math.h>
 #include "../log/Log.h"
-#include <atomic_queue/atomic_queue.h>
+#include "../queue/Queue.h"
 
 using namespace oboe;
 
@@ -22,7 +22,7 @@ public:
     bool isRecording();
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
 
-    atomic_queue::AtomicQueue<int32_t, 1024*1024, 256*256*100> queue;
+    AudioQueue queue;
 private:
     std::mutex         mLock;
     std::shared_ptr<oboe::AudioStream> mStream;
