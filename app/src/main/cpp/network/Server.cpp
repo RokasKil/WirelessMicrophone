@@ -10,21 +10,9 @@ Server::Server(const char* address, unsigned short port, AudioQueue *queue) {
     this->port = port;
     this->queue = queue;
     // Creating socket file descriptor
-    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) == 0)
+    if ((serverSocket = socket(AF_INET, SOCK_DGRAM, 0)) == 0)
     {
         LOGE("socket failed");
-        valid = false;
-        return;
-    }
-    int flag = 1;
-    int result = setsockopt(serverSocket,            /* socket affected */
-                            IPPROTO_TCP,     /* set option at TCP level */
-                            TCP_NODELAY,     /* name of option */
-                            (char *) &flag,  /* the cast is historical cruft */
-                            sizeof(int));    /* length of option value */
-
-    if (result == -1) {
-        LOGE("SETOPT FAILED");
         valid = false;
         return;
     }
@@ -57,39 +45,36 @@ bool Server::start() {
 
 void Server::acceptLoop() {
     struct sockaddr_in clientAddress;
-    int clientSocket;
-    unsigned int clientAddressLength = sizeof(clientAddressLength);
+    int recieved = 0;
+    unsigned int clientAddressLength = sizeof(clientAddress);
+
+    char* buffer = new char[1024];
+
     LOGI("ACCEPTING");
-    while(running && (clientSocket = ::accept(serverSocket, (struct sockaddr *) &clientAddress, &clientAddressLength)) >= 0) {
+    memset(&clientAddress, 0, clientAddressLength);
+    while(running && (recieved = recvfrom(serverSocket, buffer, 1023, NULL, (struct sockaddr *) &clientAddress, &clientAddressLength)) > 0) {
         connectionsMutex.lock();
         if (running) {
-            int flag = 1;
-            int result = setsockopt(clientSocket,            /* socket affected */
-                                    IPPROTO_TCP,     /* set option at TCP level */
-                                    TCP_NODELAY,     /* name of option */
-                                    (char *) &flag,  /* the cast is historical cruft */
-                                    sizeof(int));    /* length of option value */
+            string address = getAddress(clientAddress);
+            if (!connections.count(address)) {
+                connections[address] = make_shared<Connection>(-1, clientAddress);
 
-            if (result == -1) {
-                LOGE("client SETOPT FAILED");
-                close(clientSocket);
-                continue;
+                //send audio stuff here
+                LOGI("%s connected", connections[address]->getIP().c_str());
             }
-            shared_ptr<Connection> con = make_shared<Connection>(clientSocket, clientAddress);
-            con->thread = make_unique<thread>(&Server::recvLoop, this, con);
-            connections.push_back(con);
-            LOGI("%s connected", con->getIP().c_str());
+            connections[address]->lastPinged = duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
+
         }
         connectionsMutex.unlock();
     }
-    if (clientSocket < 0) {
-        LOGE("Error on accept %d", clientSocket);
+    if (recieved <= 0) {
+        LOGE("Error on accept %d %d", recieved, errno);
         valid = false;
     }
 }
 
 void Server::sendLoop() {
-    char* buffer = new char[1 + 1 + 510];
+    char* buffer = new char[512];
     int used = 0;
     //LOGI("Send LOOP");
     while (running) {
@@ -97,17 +82,17 @@ void Server::sendLoop() {
 
 
         //LOGI("BUILDING BUFFER");
-        buffer[0] = 'a';
-        used = 2;
+        //buffer[0] = 'a';
+        used = 0;
         unsigned int currentSize = queue->was_size();
         //LOGI("size %d", currentSize);
-        for(unsigned int i = 0; i < currentSize && used + 2 <= 1 + 1 + 510; i++) {
+        for(unsigned int i = 0; i < currentSize && used + 2 <= 512; i++) {
             *((int16_t*)(buffer + used)) = (int16_t)queue->pop();
             used += 2;
         }
         //LOGI("used %d", used);
-        ((unsigned char*) buffer)[1] = (unsigned char)((used - 2)/2);
-        if (used == 2) {
+        //((unsigned char*) buffer)[1] = (unsigned char)((used - 2)/2);
+        if (used == 0) {
             continue;
         }
         //LOGI("Sending");
@@ -148,14 +133,14 @@ bool Server::stop() {
         shutdown(serverSocket, SHUT_RDWR);
         close(serverSocket);
         connectionsMutex.lock();
-        for (auto con = connections.begin(); con < connections.end(); con++) {
+        /*for (auto con = connections.begin(); con < connections.end(); con++) {
             shutdown((*con)->socket, SHUT_RDWR);
             close((*con)->socket);
             (*con)->status = 2;
         }
         for (auto con = connections.begin(); con < connections.end(); con++) {
             (*con)->thread->join();
-        }
+        }*/
         connections.clear();
         connectionsMutex.unlock();
         acceptThread->join();
@@ -165,9 +150,17 @@ bool Server::stop() {
 }
 
 void Server::send(const char *data, int len) {
+    uint64_t time = duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
     connectionsMutex.lock();
-    for (auto con = connections.begin(); con < connections.end(); con++) {
-        send(*con, data, len);
+    vector<string> toRemove;
+    for (auto & connection : connections) {
+        if (connection.second->lastPinged + connection.second->pingTimeOut < time || !send(connection.second, data, len)) {
+            toRemove.push_back(connection.first);
+        }
+    }
+    for (auto & con : toRemove) {
+        LOGI("%s removed", con.c_str());
+        connections.erase(con);
     }
     connectionsMutex.unlock();
 }
@@ -176,17 +169,26 @@ void Server::send(string data) {
     send(data.c_str(), data.length());
 }
 
-void Server::send(shared_ptr<Connection> connection, const char *data, int len) {
+bool Server::send(shared_ptr<Connection> connection, const char *data, int len) {
     if (connection->status == 1) {
         connection->sendMutex.lock();
-        int sent = ::send(connection->socket, data, len, NULL);
+        int sent = sendto(serverSocket, data, len, MSG_CONFIRM, (const struct sockaddr *) &connection->addr, sizeof(connection->addr));
         if (sent == -1) {
             LOGE("Error on send %d %d", sent, errno);
             close(connection->socket);
             connection->status = 0;
+            return false;
         }
         connection->sendMutex.unlock();
+        return true;
     }
+    return false;
+}
+
+string Server::getAddress(sockaddr_in addr) {
+    stringstream ss;
+    ss << inet_ntoa(addr.sin_addr) << ":" << htons(addr.sin_port);
+    return ss.str();
 }
 
 
@@ -197,5 +199,5 @@ Server::Connection::Connection(int socket, sockaddr_in addr) {
 }
 
 string Server::Connection::getIP() {
-    return string(inet_ntoa(addr.sin_addr));
+    return Server::getAddress(addr);
 }

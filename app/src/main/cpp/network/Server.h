@@ -9,6 +9,7 @@
 #include <cstring>
 #include <thread>
 #include <vector>
+#include <map>
 #include <mutex>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -16,7 +17,7 @@
 #include "../queue/Queue.h"
 #include <unistd.h>
 #include <netinet/tcp.h>
-
+#include <sstream>
 using namespace std;
 
 class Server {
@@ -35,19 +36,19 @@ private:
         Connection(int socket, sockaddr_in addr);
         std::mutex sendMutex;
         uint64_t lastPinged = -1;
-        uint64_t pingTimeOut = 1 * 60 * 1000;
+        uint64_t pingTimeOut = 2 * 1000;
         string getIP();
     };
-
     void acceptLoop();
     void sendLoop();
     void recvLoop(shared_ptr<Connection> connection);
     void send(const char *data, int len);
     void send(string data);
-    void send(shared_ptr<Connection> connection, const char *data, int len);
+    bool send(shared_ptr<Connection> connection, const char *data, int len);
+    static string getAddress(sockaddr_in addr);
     unsigned short port;
     int serverSocket;
-    vector<shared_ptr<Connection>> connections;
+    map<string, shared_ptr<Connection>> connections;
     bool valid = true;
     bool running = false;
     unique_ptr<thread> acceptThread = NULL;
